@@ -63,6 +63,44 @@ public class AuthController {
         return new ResponseEntity<>(new SuccessResponse("User registered successfully"), HttpStatus.OK);
     }
 
+    @PostMapping("/auth/login")
+    public ResponseEntity<AppResponse> login(@Valid @RequestBody LoginDto loginRequest, HttpServletRequest request, Principal principal) {
 
+        String clientCredentials = request.getHeader("Authorization");
+        if (clientCredentials != null && clientCredentials.toLowerCase().startsWith("basic ")) {
+
+            byte[] base64Token = clientCredentials.substring(6).getBytes(StandardCharsets.UTF_8);
+            byte[] decoded = Base64.getDecoder().decode(base64Token);
+            String token = new String(decoded, StandardCharsets.UTF_8);
+            String[] basicCredentials = token.split(":");
+            if (basicCredentials.length == 2) {
+                String oauth2ClientUsername = basicCredentials[0];
+
+                ClientDetails user = jdbcClientDetailsService.loadClientByClientId(oauth2ClientUsername);
+                if (passwordEncoder.matches(basicCredentials[1], user.getClientSecret())) {
+                    Map<String, String> parameters = new HashMap<>();
+                    parameters.put("username", loginRequest.getUsername());
+                    parameters.put("password", loginRequest.getPassword());
+                    parameters.put("grant_type", "password");
+
+                    try {
+                        Collection<? extends GrantedAuthority> authorities = user.getAuthorities();
+
+                        principal = new UsernamePasswordAuthenticationToken(new User(oauth2ClientUsername, "", user.getAuthorities()),
+                                null, authorities);
+
+                        ResponseEntity<OAuth2AccessToken> oauthToken = tokenEndpoint.postAccessToken(principal, parameters);
+                        OAuth2AccessToken body = oauthToken.getBody();
+
+                        //noinspection OptionalGetWithoutIsPresent,ConstantConditions
+                        return ResponseEntity.ok(LoginSuccessResponse.build(body.getValue(), userService.findByUsername(loginRequest.getUsername()).get()));
+                    } catch (HttpRequestMethodNotSupportedException e) {
+                        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ErrorResponse(e.getMessage()));
+                    }
+                }
+            }
+        }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ErrorResponse("Invalid Credentials"));
+    }
 
 }
